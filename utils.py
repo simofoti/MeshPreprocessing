@@ -69,3 +69,28 @@ def import_wrap_point_on_triangle_landmarks(landmarks_path,
 
     return np.asarray(lms)
 
+
+def import_wrap_point_on_triangle_landmarks_as_b_coords(landmarks_path):
+    """
+    This function imports landmarks which were manually defined in Wrap3D and
+    exported as 'point on triangle'. This data format represents each landmark
+    as a point on a triangular face of the mesh. Therefore, it stores the index
+    of the face on which the landmark belongs, and the barycentric coordinates
+    of the landmark with respect to the vertices of the face.
+
+    :param landmarks_path: path to the txt file storing the landmarks
+    :return: landmarks as a Nx3 numpy array, where N is the number of landmarks.
+    """
+    with open(landmarks_path, "r") as f:
+        raw = ''.join(f.readlines())
+    bar_coords = raw.replace(' ', '').replace('\n', '').strip('[]').split('],[')
+
+    tri_idxs, b_lms = [], []
+    for bc in bar_coords:
+        bcs = bc.split(',')
+        tri_idxs.append(int(bcs[0]))
+        b_lms.append([float(bcs[1]), float(bcs[1]),
+                      1 - float(bcs[1]) - float(bcs[2])])
+
+    return tri_idxs, np.asarray(b_lms)
+
