@@ -13,6 +13,7 @@ import utils
 
 
 class Registerer(ABC):
+    """ Abstract class for registration algorithms."""
     def __init__(self, reference_path, reference_landmarks_path=None,
                  show_results=False):
         self._reference_mesh = utils.load_trimesh(reference_path)

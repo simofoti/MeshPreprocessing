@@ -1,6 +1,7 @@
 import fire
 
 import registration
+import normalisation
 
 
 def fire_no_out_print(component=None, command=None, name=None, serialize=None):
@@ -19,7 +20,8 @@ def fire_no_out_print(component=None, command=None, name=None, serialize=None):
 
 
 if __name__ == "__main__":
-    fire_no_out_print({
+
+    registration_dict = {
         "procrustes_landmark_registration":
             registration.ProcrustesLandmarkRegisterer,
         "inertia_axes_and_icp_registration":
@@ -28,4 +30,12 @@ if __name__ == "__main__":
             registration.ProcrustesLandmarkAndIcpRegisterer,
         "procrustes_landmark_and_nicp_registration":
             registration.ProcrustesLandmarkAndNicpRegisterer,
-    })
+    }
+
+    normalisation_dict = {
+        "normalisation": normalisation.Normaliser,
+        "normalization": normalisation.Normaliser,
+        "encryption": normalisation.Normaliser
+    }  # expose the same class with different names
+
+    fire_no_out_print({**registration_dict, **normalisation_dict})

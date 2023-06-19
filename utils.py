@@ -16,9 +16,10 @@ def find_filenames(root):
     for dirpath, _, fnames in os.walk(root):
         for f in fnames:
             if f.endswith('.ply') or f.endswith('.obj') or f.endswith('.stl'):
-                absolute_path = os.path.join(dirpath, f)
-                f = absolute_path[dirpath.index(root) + root_l + 1:]
-                files.append(f)
+                if f[0] != '.':  # the file is not hidden
+                    absolute_path = os.path.join(dirpath, f)
+                    f = absolute_path[dirpath.index(root) + root_l + 1:]
+                    files.append(f)
     return files
 
 
