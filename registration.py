@@ -7,6 +7,7 @@ import numpy as np
 
 from abc import ABC, abstractmethod
 from scipy.linalg import orthogonal_procrustes
+from scipy import sparse
 
 import utils
 
@@ -33,6 +34,14 @@ class Registerer(ABC):
     @abstractmethod
     def register(self, mesh, mesh_landmarks=None, **kwargs) -> trimesh.Trimesh:
         pass
+
+    @property
+    def reference_mesh(self):
+        return self._reference_mesh
+
+    @property
+    def reference_landmarks(self):
+        return self._reference_landmarks
 
     def register_all_and_save(self, meshes_dir, landmarks_dir=None, **kwargs):
         self._show_results = False
@@ -171,106 +180,229 @@ class ProcrustesLandmarkAndIcpRegisterer(Registerer):
 
 class ProcrustesLandmarkAndNicpRegisterer(Registerer):
     """ Class to perform Non-rigid ICP after an initial landmark-based
-    Procrustes registration. NICP is wrapping the trimesh implementations:
-    trimesh.registration.nricp_amberg() and trimesh.registration.nricp_sumner().
+    Procrustes registration. The NICP implementation is inspired by menpo3d:
+    https://github.com/menpo/menpo3d/blob/6650918e786ac98112387b97f5ecf8cc67025
+        f9f/menpo3d/correspond/nicp.py#L243
+    Our implementation is not bounded to the menpo library, and it does
+    not require the landmarks to follow the ibug conventions
+    (although advised for heads and faces).
+    The new mesh is first aligned to the reference, then the reference is non
+    rigidly deformed to match the new mesh
     """
     def __init__(self, reference_path, reference_landmarks_path,
                  show_results=False):
         super().__init__(reference_path, reference_landmarks_path, show_results)
         self._p_registerer = ProcrustesLandmarkRegisterer(
             reference_path, reference_landmarks_path)
-        self._reference_landmarks_barycentric = \
-            utils.import_wrap_point_on_triangle_landmarks_as_b_coords(
-                reference_landmarks_path
-            )
 
-    def register(self, mesh, mesh_landmarks=None, algorithm="sumner",
-                 steps=None, eps=0.001, gamma=1, distance_threshold=0.1,
-                 use_faces=False) -> trimesh.Trimesh:
+    def register(self, mesh, mesh_landmarks=None, eps=1e-3, max_iters=8,
+                 stiffness_weights=None, data_weights=None,
+                 landmark_weights=None) -> trimesh.Trimesh:
         """
         Calling this function the reference mesh is fitted onto 'mesh'
         :param mesh: Trimesh to fit
         :param mesh_landmarks: landmarks of the mesh to fit
-        :param algorithm: either amberg or sumner.
-        :param steps:  Core parameters of the algorithm
-            Iterable of iterables (wc, wi, ws, wl, wn).
-            wc is the correspondence term (strength of fitting),
-            wi is the identity term (recommended value : 0.001),
-            ws is smoothness term, wl weights the landmark
-            importance and wn the normal importance.
-        :param eps: float. For amberg only. If the error decrease is inferior to
-            this value, the current step ends.
-        :param gamma: float. For amberg only. Weight the translation part
-            against the rotational/skew part.
-        :param distance_threshold: float. Distance threshold to account for
-            a vertex match or not.
-        :param use_faces: bool. If true, computes the closest distances
-            also with respect to mesh faces. If false only with respect
-            to vertices.
+        :param eps: float. If the error decrease is inferior to this value,
+            the current step ends.
+        :param max_iters: maximum number of iterations per step.
+        :param stiffness_weights: these weights can be provided either as a
+            list of scalars that equally weight all edges at each step, or
+            as per-vertex values, thus enabling more control over regional
+            deformations. The length of the list determines the number of steps
+            of the algorithm (i.e. how many times the algorithm runs with a
+            specific set of weights). It should have the same length as
+            data_weights and landmark_weights. If None, default values
+            are used.
+        :param data_weights: these weights can be provided either as a list of
+            scalars that equally weight all vertex normals at each step, or
+            as per-vertex values, thus enabling more control over regional
+            deformations. The length of the list determines the number of steps
+            of the algorithm (i.e. how many times the algorithm runs with a
+            specific set of weights). It should have the same length as
+            stiffness_weights and landmark_weights. If None, default values
+            are used.
+        :param landmark_weights: list of scala weights to use at every step of
+            the algorithm to control the influence of the landmarks over
+            the registration. The length of the list determines the number of
+            steps of the algorithm (i.e. how many times the algorithm runs with
+            a specific set of weights). It should have the same length as
+            stiffness_weights and data_weights. If None, default values
+            are used.
 
-        :return: Trimesh obtained registering vertices of the reference mesh
-            onto the target geometry.
+        :return: Trimesh obtained non-rigidly registering vertices of the
+            reference mesh onto the mesh geometry. Ideally, this method should
+            return a mesh with the same geometry of the 'mesh' and the same
+            topology of the 'reference' mesh.
         """
         landmark_aligned, mesh_landmarks = self._p_registerer.register(
             mesh, mesh_landmarks, return_landmarks=True)
 
-        if algorithm == "amberg":
-            if steps is None:
-                steps = [
-                    # ws, wl, wn, max_iter
-                    [50, 5, 0.5, 3],
-                    [20, 2, 0.5, 3],
-                    [5, 0.5, 0.5, 3],
-                    [0.5, 0, 0.5, 3],
-                    [0.2, 0, 0.5, 3],
-                ]
+        reference_verts = self._reference_mesh.vertices
+        reference_trilist = self._reference_mesh.faces
+        mesh_verts = landmark_aligned.vertices
+        mesh_normals = mesh.vertex_normals
 
-            registered_vertices = trimesh.registration.nricp_amberg(
-                source_mesh=self._reference_mesh,
-                target_geometry=landmark_aligned,
-                source_landmarks=self._reference_landmarks_barycentric,
-                target_positions=mesh_landmarks,
-                steps=steps, eps=eps, gamma=gamma,
-                distance_threshold=distance_threshold, use_faces=use_faces,
-                use_vertex_normals=use_faces, return_records=False)
+        # Scale meshes and their landmarks #####################################
+        # Scale factors completely change the behavior of the algorithm
+        # rescale the reference down to a sensible size
+        # (so it fits inside box of diagonal 1) and is centred on the origin.
+        # This is undone after the fit.
+        tr = np.mean(reference_verts, axis=0)
+        reference_bounds_diff = \
+            np.max(reference_verts, axis=0) - np.min(reference_verts, axis=0)
+        sc = np.sqrt(np.sum(reference_bounds_diff ** 2))
 
-        elif algorithm == "sumner":
-            if steps is None:
-                wi, wn = 0.0001, 1
-                steps = [
-                    # wc, wi, ws, wl, wn
-                    [0, wi, 50, 10, wn],
-                    [0.1, wi, 20, 2, wn],
-                    [1, wi, 5, 0.5, wn],
-                    [5, wi, 2, 0.1, wn],
-                    [10, wi, 0.8, 0, wn],
-                    [50, wi, 0.5, 0, wn],
-                    [100, wi, 0.35, 0, wn],
-                    [1000, wi, 0.2, 0, wn],
-                ]
+        reference_verts = (reference_verts - tr) / sc
+        mesh_verts = (mesh_verts - tr) / sc
+        mesh_landmarks = (mesh_landmarks - tr) / sc
+        reference_landmarks = (self._reference_landmarks - tr) / sc
+        ########################################################################
 
-            registered_vertices = trimesh.registration.nricp_sumner(
-                source_mesh=self._reference_mesh,
-                target_geometry=landmark_aligned,
-                source_landmarks=self._reference_landmarks_barycentric,
-                target_positions=mesh_landmarks,
-                steps=steps, distance_threshold=distance_threshold,
-                use_faces=use_faces, use_vertex_normals=use_faces,
-                return_records=False)
+        # Prepare weights ######################################################
+        if stiffness_weights is None:
+            stiffness_weights = [50, 20, 5, 2, 0.8, 0.5, 0.35, 0.2]
 
+        n_iterations = len(stiffness_weights)
+
+        if mesh_landmarks is not None and landmark_weights is None:
+            landmark_weights = [5, 2, 0.5, 0, 0, 0, 0, 0]
+        elif landmark_weights is None:
+            landmark_weights = [None] * n_iterations
+
+        if data_weights is None:
+            data_weights = [None] * n_iterations
+        ########################################################################
+
+        # Prepare all info that can be computed before looping #################
+
+        n_dims = reference_verts.shape[1]
+        h_dims = n_dims + 1  # Homogeneous dimension
+        n = reference_verts.shape[0]
+
+        mat_s, unique_edge_pairs = self.reference_node_arc_incidence_matrix()
+
+        # weight matrix
+        weight_mat = np.identity(n_dims + 1)
+        weight_mat_kron_s = sparse.kron(mat_s, weight_mat)
+
+        # init transformation
+        x_prev = np.tile(np.zeros((n_dims, h_dims)), n).T
+        current_verts = reference_verts
+
+        # prepare some indices for efficient construction of the sparse matrices
+        row = np.hstack(
+            (np.repeat(np.arange(n)[:, None], n_dims, axis=1).ravel(),
+             np.arange(n))
+        )
+        x = np.arange(n * h_dims).reshape((n, h_dims))
+        col = np.hstack((x[:, :n_dims].ravel(), x[:, n_dims]))
+        o = np.ones(n)
+
+        if mesh_landmarks is not None:
+            reference_lm_index = utils.closest_indices_to_landmarks(
+                reference_verts, reference_landmarks)
+            mesh_lms = mesh_landmarks
+            n_landmarks = mesh_lms.shape[0]
+            lm_mask = np.in1d(row, reference_lm_index)
+            col_lm = col[lm_mask]
+            row_lm_to_fix = row[lm_mask]
+            reference_lm_index_l = list(reference_lm_index)
+            row_lm = np.array(
+                [reference_lm_index_l.index(r) for r in row_lm_to_fix])
         else:
-            raise NotImplementedError(f"{algorithm} algorithm for NICP not "
-                                      f"implemented yet. Use either 'amberg' "
-                                      f"or 'sumner'.")
+            mesh_lms, n_landmarks, lm_mask, = None, None, None
+            row_lm, col_lm = None, None
+        ########################################################################
+
+        for alpha, beta, gamma in zip(
+                stiffness_weights, landmark_weights, data_weights):
+
+            alpha_is_per_vertex = isinstance(alpha, np.ndarray)
+            if alpha_is_per_vertex:  # stiffness is provided per-vertex
+                if alpha.shape[0] != n:
+                    raise ValueError()
+                alpha_per_edge = alpha[unique_edge_pairs].mean(axis=1)
+                alpha_mat_s = sparse.diags(alpha_per_edge).dot(mat_s)
+                alpha_weight_mat_kron_s = sparse.kron(alpha_mat_s, weight_mat)
+            else:  # stiffness is global
+                alpha_weight_mat_kron_s = alpha * weight_mat_kron_s
+
+            j = 0
+            while True:  # iterate until convergence
+                j += 1  # track the iterations for this alpha/landmark weight
+
+                nearest_verts, nearest_indices = \
+                    utils.find_nearest_verts_and_indices(
+                        current_verts, mesh_verts)
+                nearest_normals = mesh_normals[nearest_indices]
+
+                # Calculate the normals of the current current_verts
+                current_mesh = trimesh.Trimesh(current_verts,
+                                               faces=reference_trilist)
+                current_normals = current_mesh.vertex_normals
+
+                # If the dot of the normals < 0.9 don't contrib to deformation
+                normals_weight_mat = \
+                    (nearest_normals * current_normals).sum(axis=1) > 0.9
+
+                if gamma is not None:
+                    normals_weight_mat = normals_weight_mat * gamma
+
+                # Build the sparse diagonal weight matrix
+                normals_weight_mat_s = sparse.diags(
+                    normals_weight_mat.astype(float)[None, :], [0])
+
+                data = np.hstack((current_verts.ravel(), o))
+                data_s = sparse.coo_matrix((data, (row, col)))
+
+                to_stack_a = [alpha_weight_mat_kron_s,
+                              normals_weight_mat_s.dot(data_s)]
+                to_stack_b = [np.zeros((alpha_weight_mat_kron_s.shape[0],
+                                        n_dims)),
+                              nearest_verts * normals_weight_mat[:, None]]
+
+                if mesh_landmarks is not None:
+                    lms_data_mat_s = sparse.coo_matrix(
+                        (data[lm_mask], (row_lm, col_lm)),
+                        shape=(n_landmarks, data_s.shape[1])
+                    )
+                    to_stack_a.append(beta * lms_data_mat_s)
+                    to_stack_b.append(beta * mesh_lms)
+
+                a_s = sparse.vstack(to_stack_a).tocsr()
+                b_s = sparse.vstack(to_stack_b).tocsr()
+
+                x = utils.sparse_solve(a_s, b_s)
+
+                # deform template
+                current_verts = data_s.dot(x)
+
+                err = np.linalg.norm(x_prev - x, ord="fro")
+                stop_criterion = err / np.sqrt(np.size(x_prev))
+
+                x_prev = x
+
+                if stop_criterion < eps or j > max_iters:
+                    break
 
         registered_mesh = self._reference_mesh.copy()
-        registered_mesh.vertices = registered_vertices
+        registered_mesh.vertices = current_verts * sc + tr
 
         if self._show_results:
             self.show_results(registered_mesh, comparison_mesh=landmark_aligned)
             registered_mesh.show()
 
         return registered_mesh
+
+    def reference_node_arc_incidence_matrix(self):
+        unique_edge_pairs = self._reference_mesh.edges_unique
+        m = unique_edge_pairs.shape[0]
+
+        # Generate a "node-arc" (i.e. vertex-edge) incidence matrix.
+        row = np.hstack((np.arange(m), np.arange(m)))
+        col = unique_edge_pairs.T.ravel()
+        data = np.hstack((-1 * np.ones(m), np.ones(m)))
+        return sparse.coo_matrix((data, (row, col))), unique_edge_pairs
 
 
 if __name__ == "__main__":
@@ -287,7 +419,7 @@ if __name__ == "__main__":
     #     reference_path=rmp, reference_landmarks_path=rlp, show_results=True)
     registerer = ProcrustesLandmarkAndNicpRegisterer(
         reference_path=rmp, reference_landmarks_path=rlp, show_results=True)
-    registerer(mp, lp, algorithm="amberg")
+    registerer(mp, lp)
     print("done")
 
 
