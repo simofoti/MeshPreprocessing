@@ -2,6 +2,7 @@ import fire
 
 import registration
 import normalisation
+import augmentation
 
 
 def fire_no_out_print(component=None, command=None, name=None, serialize=None):
@@ -38,4 +39,13 @@ if __name__ == "__main__":
         "encryption": normalisation.Normaliser
     }  # expose the same class with different names
 
-    fire_no_out_print({**registration_dict, **normalisation_dict})
+    augmentation_dict = {
+        "random_linear_interpolation": augmentation.RandomLinearInterpolation,
+        "random_spectral_interpolation":
+            augmentation.RandomSpectralInterpolation,
+        "random_spectral_perturbation": augmentation.RandomSpectralPerturbation
+    }
+
+    fire_no_out_print({**registration_dict,
+                       **normalisation_dict,
+                       **augmentation_dict})

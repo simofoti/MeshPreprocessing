@@ -46,6 +46,8 @@ class Registerer(ABC):
 
     def register_all_and_save(self, meshes_dir, landmarks_dir=None, **kwargs):
         self._show_results = False
+        out_dir = os.path.join(meshes_dir, "registered")
+
         all_files = utils.find_filenames(meshes_dir)
         for fname in all_files:
             if landmarks_dir is not None:
@@ -62,7 +64,6 @@ class Registerer(ABC):
 
             registered_mesh = self.__call__(fname, lms_path, **kwargs)
 
-            out_dir = os.path.join(meshes_dir, "registered")
             registered_mesh.export(
                 os.path.join(out_dir, os.path.split(fname)[1]))
 

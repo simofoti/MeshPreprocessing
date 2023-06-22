@@ -11,7 +11,11 @@ class Normaliser:
     encryption, the normalisation_dictionary behaves as the encryption key and
     needs to be transferred separately. All the normalised meshes can be
     considered to be encrypted. Anyone who visualise them will see random
-    shapes unless they are un-normalised first."""
+    shapes unless they are un-normalised first.
+
+    NB: meshes need to be in dense point correspondence. Run a non-rigid
+    registration algorithm first
+    (e.g. registration.ProcrustesLandmarkAndNicpRegisterer)"""
 
     def __init__(self, data_path, normalisation_dict_path=None,
                  random_normalisation_dict=False):

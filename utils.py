@@ -147,6 +147,10 @@ def closest_indices_to_landmarks(vertices, landmarks):
     return indices
 
 
+def interpolate(x1, x2, value=0.5):
+    return x1 + value * (x2 - x1)
+
+
 # Functions with multiple implementations. The fastest implementation is
 # always prioritised. If the library needed is not available use slower option.
 
