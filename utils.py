@@ -151,6 +151,64 @@ def interpolate(x1, x2, value=0.5):
     return x1 + value * (x2 - x1)
 
 
+def create_data_weights(template,
+                        nose_point=None, n_iters=8, face_radius=1.5, blend=0.55,
+                        stiff_nostrils_idx_plk_path=None,
+                        stiff_ears_idx_pkl_path=None):
+    """
+    This function can be used to create the data_weights used when fitting head
+    or face meshes with ProcrustesLandmarkAndNicpRegisterer. Increasing the
+    stiffness of head, nostrils, and ears, can prevent unrealistic deformations
+    of these parts.
+
+    :param template: template shape that is going to be deformed during nicp.
+    :param nose_point: index of a point placed on the tip of the nose. It is
+        used to compute the stiffness of the head. If None, the head regions
+        around the nose_point are all free to deform.
+    :param n_iters: this parameter determines the number of iterations performed
+        by nicp. Currently, the data weights remain constant across iterations.
+    :param face_radius: radius around the tip of the nose used to determine
+        stiffness.
+    :param blend: strength of blending used for the stiff head.
+    :param stiff_nostrils_idx_plk_path: link to the pickle file containing the
+        indices of the nostrils that need to remain stiff during deformation.
+    :param stiff_ears_idx_pkl_path: link to the pickle file containing the
+        indices of the ears that need to remain stiff during deformation.
+
+    :return: data weights that can be used during registration with
+        ProcrustesLandmarkAndNicpRegisterer.
+    """
+    import pickle
+    weights = np.ones(template.vertices.shape[0])
+
+    if nose_point is not None:  # stiffness of the head regions surrounding nose
+        dist_nose = face_radius - \
+            np.linalg.norm((nose_point - template.vertices), axis=1)
+        dist_nose[dist_nose < 0] = 0
+        dist_nose[dist_nose > blend * face_radius] = blend * face_radius
+        weights = np.minimum(weights, (1 / np.max(dist_nose)) * dist_nose)
+
+    if stiff_nostrils_idx_plk_path is not None:
+        with open(stiff_nostrils_idx_plk_path, 'rb') as f:
+            nostril_idxs = pickle.load(f)
+
+        weights[nostril_idxs] = 0.0
+
+    if stiff_ears_idx_pkl_path is not None:
+        with open(stiff_ears_idx_pkl_path, 'rb') as f:
+            ears_idxs = pickle.load(f)
+        weights[ears_idxs] = 0.0
+
+    weights = smooth_step(weights, weights.min(), weights.max())
+    weights = np.repeat([weights], n_iters, axis=0)
+    return weights
+
+
+def smooth_step(x, x_min=0, x_max=1):
+    y = np.clip((x - x_min)/(x_max - x_min), 0, 1)
+    return 6 * (y ** 5) - 15 * (y ** 4) + 10 * (y ** 3)
+
+
 # Functions with multiple implementations. The fastest implementation is
 # always prioritised. If the library needed is not available use slower option.
 
@@ -218,60 +276,3 @@ except ModuleNotFoundError:
         solved = spsolve(a_sparse.T.dot(a_sparse), a_sparse.T.dot(b_sparse))
         return solved.toarray()
 
-
-def create_data_weights(template,
-                        nose_point=None, n_iters=8, face_radius=1.5, blend=0.55,
-                        stiff_nostrils_idx_plk_path=None,
-                        stiff_ears_idx_pkl_path=None):
-    """
-    This function can be used to create the data_weights used when fitting head
-    or face meshes with ProcrustesLandmarkAndNicpRegisterer. Increasing the
-    stiffness of head, nostrils, and ears, can prevent unrealistic deformations
-    of these parts.
-
-    :param template: template shape that is going to be deformed during nicp.
-    :param nose_point: index of a point placed on the tip of the nose. It is
-        used to compute the stiffness of the head. If None, the head regions
-        around the nose_point are all free to deform.
-    :param n_iters: this parameter determines the number of iterations performed
-        by nicp. Currently, the data weights remain constant across iterations.
-    :param face_radius: radius around the tip of the nose used to determine
-        stiffness.
-    :param blend: strength of blending used for the stiff head.
-    :param stiff_nostrils_idx_plk_path: link to the pickle file containing the
-        indices of the nostrils that need to remain stiff during deformation.
-    :param stiff_ears_idx_pkl_path: link to the pickle file containing the
-        indices of the ears that need to remain stiff during deformation.
-
-    :return: data weights that can be used during registration with
-        ProcrustesLandmarkAndNicpRegisterer.
-    """
-    import pickle
-    weights = np.ones(template.vertices.shape[0])
-
-    if nose_point is not None:  # stiffness of the head regions surrounding nose
-        dist_nose = face_radius - \
-            np.linalg.norm((nose_point - template.vertices), axis=1)
-        dist_nose[dist_nose < 0] = 0
-        dist_nose[dist_nose > blend * face_radius] = blend * face_radius
-        weights = np.minimum(weights, (1 / np.max(dist_nose)) * dist_nose)
-
-    if stiff_nostrils_idx_plk_path is not None:
-        with open(stiff_nostrils_idx_plk_path, 'rb') as f:
-            nostril_idxs = pickle.load(f)
-
-        weights[nostril_idxs] = 0.0
-
-    if stiff_ears_idx_pkl_path is not None:
-        with open(stiff_ears_idx_pkl_path, 'rb') as f:
-            ears_idxs = pickle.load(f)
-        weights[ears_idxs] = 0.0
-
-    weights = smooth_step(weights, weights.min(), weights.max())
-    weights = np.repeat([weights], n_iters, axis=0)
-    return weights
-
-
-def smooth_step(x, x_min=0, x_max=1):
-    y = np.clip((x - x_min)/(x_max - x_min), 0, 1)
-    return 6 * (y ** 5) - 15 * (y ** 4) + 10 * (y ** 3)
