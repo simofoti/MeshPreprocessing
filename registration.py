@@ -24,13 +24,17 @@ class Registerer(ABC):
             self._reference_landmarks = None
         self._show_results = show_results
 
-    def __call__(self, mesh_path, mesh_landmarks_path=None, **kwargs):
+    def __call__(self, mesh_path, mesh_landmarks_path=None, 
+                 out_path=None, **kwargs):
         mesh = utils.load_trimesh(mesh_path)
         if mesh_landmarks_path is not None:
             lms = utils.load_landmarks(mesh_landmarks_path, mesh=mesh)
         else:
             lms = None
-        return self.register(mesh, lms)
+        registered_mesh = self.register(mesh, lms)
+        if out_path is not None:
+            registered_mesh.export(out_path)
+        return registered_mesh
 
     @abstractmethod
     def register(self, mesh, mesh_landmarks=None, **kwargs) -> trimesh.Trimesh:
