@@ -344,7 +344,8 @@ class ProcrustesLandmarkAndNicpRegisterer(Registerer):
 
                 # Calculate the normals of the current current_verts
                 current_mesh = trimesh.Trimesh(current_verts,
-                                               faces=reference_trilist)
+                                               faces=reference_trilist,
+                                               process=False)
                 current_normals = current_mesh.vertex_normals
 
                 # If the dot of the normals < 0.9 don't contrib to deformation
