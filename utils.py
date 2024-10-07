@@ -27,6 +27,14 @@ def load_trimesh(mesh_path):
     return trimesh.load_mesh(mesh_path, process=False)
 
 
+def colours_to_data_weights(mesh, n_iters=None):
+    colours = mesh.visual.vertex_colors
+    values = np.mean(colours, axis=1)
+    if n_iters is not None:
+        values = np.repeat([values], n_iters, axis=0)
+    return 1 - np.clip(values / 255, 0, 1)
+
+
 def load_landmarks(landmarks_path, lms_type="point_on_triangle",
                    mesh=None, mesh_path=None):
     if lms_type == "point_on_triangle":

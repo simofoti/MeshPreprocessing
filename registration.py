@@ -31,7 +31,7 @@ class Registerer(ABC):
             lms = utils.load_landmarks(mesh_landmarks_path, mesh=mesh)
         else:
             lms = None
-        registered_mesh = self.register(mesh, lms)
+        registered_mesh = self.register(mesh, lms, **kwargs)
         if out_path is not None:
             registered_mesh.export(out_path)
         return registered_mesh
@@ -226,8 +226,10 @@ class ProcrustesLandmarkAndNicpRegisterer(Registerer):
             of the algorithm (i.e. how many times the algorithm runs with a
             specific set of weights). It should have the same length as
             stiffness_weights and landmark_weights. If None, default values
-            are used.
-        :param landmark_weights: list of scala weights to use at every step of
+            are used. If a path is provided, it will use vertex colours of
+            the mesh to define the data_weights. Lighter coloured regions will 
+            be stiffer than darker regions.
+        :param landmark_weights: list of scalar weights to use at every step of
             the algorithm to control the influence of the landmarks over
             the registration. The length of the list determines the number of
             steps of the algorithm (i.e. how many times the algorithm runs with
@@ -277,6 +279,11 @@ class ProcrustesLandmarkAndNicpRegisterer(Registerer):
 
         if data_weights is None:
             data_weights = [None] * n_iterations
+        elif isinstance(data_weights, str):
+            mesh_with_colours = utils.load_trimesh(data_weights)
+            data_weights = utils.colours_to_data_weights(
+                mesh_with_colours, n_iterations
+            )
         ########################################################################
 
         # Prepare all info that can be computed before looping #################
